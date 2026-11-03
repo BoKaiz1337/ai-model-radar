@@ -19,6 +19,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      TZ: Asia/Shanghai
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
