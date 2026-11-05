@@ -1841,6 +1841,14 @@ def write_snapshot(con, day, rows, changes, run_meta):
         con.execute("DELETE FROM changes WHERE day < ?", (cutoff,))
 
 
+def mark_run_failed(con: sqlite3.Connection, day: str) -> None:
+    try:
+        with con:
+            con.execute("UPDATE runs SET ok = 0 WHERE day = ?", (day,))
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # 仪表盘数据
 # ---------------------------------------------------------------------------
@@ -2048,6 +2056,12 @@ def generate_report(data: dict) -> Path:
     for c in data["changes"]:
         groups.setdefault(c["kind"], []).append(c)
 
+    def change_name(c):
+        return c.get("model_name") or c.get("name") or c.get("key") or "未知模型"
+
+    def change_vendor(c):
+        return c.get("vendor_name") or c.get("vendor") or ""
+
     def add_group(title, items, limit=40):
         if not items:
             return
@@ -2055,19 +2069,19 @@ def generate_report(data: dict) -> Path:
         lines.append("")
         for c in items[:limit]:
             if c["kind"] == "new":
-                lines.append(f"- **{c['model_name']}** · {c['vendor_name']} · 新收录")
+                lines.append(f"- **{change_name(c)}** · {change_vendor(c)} · 新收录")
             elif c["kind"] == "price":
                 label = dict(PRICE_FIELDS).get(c["field"], c["field"])
                 lines.append(
-                    f"- **{c['model_name']}** · {c['vendor_name']} · {label} "
+                    f"- **{change_name(c)}** · {change_vendor(c)} · {label} "
                     f"${fmt_price(float(c['old_value']) if c['old_value'] else None)} → "
                     f"${fmt_price(float(c['new_value']) if c['new_value'] else None)}"
                 )
             elif c["kind"] == "removed":
-                lines.append(f"- **{c['model_name']}** · {c['vendor_name']} · 已从数据源移除")
+                lines.append(f"- **{change_name(c)}** · {change_vendor(c)} · 已从数据源移除")
             else:
                 label = dict(META_FIELDS).get(c["field"], c["field"])
-                lines.append(f"- **{c['model_name']}** · {c['vendor_name']} · {label} "
+                lines.append(f"- **{change_name(c)}** · {change_vendor(c)} · {label} "
                              f"{c['old_value'] or '—'} → {c['new_value'] or '—'}")
         if len(items) > limit:
             lines.append(f"- …另有 {len(items) - limit} 条")
@@ -2128,12 +2142,12 @@ def print_summary(data: dict, report_path=None):
                 new = float(c["new_value"]) if c["new_value"] else 0
                 pct = (new - old) / old * 100 if old else 0
                 arrow = "↑" if new > old else "↓"
-                print(f"     {arrow} {c['model_name']}（{c['vendor_name']}）"
+                print(f"     {arrow} {c.get('model_name') or c.get('key')}（{c.get('vendor_name') or c.get('vendor')}）"
                       f"{label} ${fmt_price(old)} → ${fmt_price(new)}  {pct:+.1f}%")
             elif c["kind"] == "new":
-                print(f"     + {c['model_name']}（{c['vendor_name']}）新收录")
+                print(f"     + {c.get('model_name') or c.get('key')}（{c.get('vendor_name') or c.get('vendor')}）新收录")
             elif c["kind"] == "removed":
-                print(f"     - {c['model_name']}（{c['vendor_name']}）下架")
+                print(f"     - {c.get('model_name') or c.get('key')}（{c.get('vendor_name') or c.get('vendor')}）下架")
     print(f"   面板  {DASH_PATH}")
     if report_path:
         print(f"   日报  {report_path}")
@@ -2324,14 +2338,18 @@ def cmd_update(args):
     write_snapshot(con, day, rows, changes, run_meta)
     set_state(con, "last_full_at", now_local().isoformat())
 
-    data = load_dashboard_data(con, cfg, day=day)
-    render_dashboard(data)
-    report_path = generate_report(data)
-    if not args.quiet:
-        print_summary(data, report_path)
-    elif not run_meta["ok"]:
-        err("⚠ 本次更新部分降级，详见日志。")
-    maybe_notify(con, cfg, args, rows, changes, "全量更新")
+    try:
+        data = load_dashboard_data(con, cfg, day=day)
+        render_dashboard(data)
+        report_path = generate_report(data)
+        if not args.quiet:
+            print_summary(data, report_path)
+        elif not run_meta["ok"]:
+            err("⚠ 本次更新部分降级，详见日志。")
+        maybe_notify(con, cfg, args, rows, changes, "全量更新")
+    except Exception:
+        mark_run_failed(con, day)
+        raise
 
     elapsed = (now_local() - started).total_seconds()
     log(f"全量更新完成，用时 {elapsed:.1f}s，写入 {len(rows)} 条记录，{len(changes)} 条变动。")
@@ -2408,12 +2426,16 @@ def run_light(cfg, con, args):
     }
     write_snapshot(con, day, rows, changes, run_meta)
 
-    data = load_dashboard_data(con, cfg, day=day)
-    render_dashboard(data)
-    report_path = generate_report(data)
-    if not getattr(args, "quiet", False):
-        print_light_summary(data, tick_changes, report_path)
-    maybe_notify(con, cfg, args, rows, tick_changes, "轻量更新")
+    try:
+        data = load_dashboard_data(con, cfg, day=day)
+        render_dashboard(data)
+        report_path = generate_report(data)
+        if not getattr(args, "quiet", False):
+            print_light_summary(data, tick_changes, report_path)
+        maybe_notify(con, cfg, args, rows, tick_changes, "轻量更新")
+    except Exception:
+        mark_run_failed(con, day)
+        raise
 
     elapsed = (now_local() - started).total_seconds()
     log(f"轻量更新完成，用时 {elapsed:.1f}s，OpenRouter {len(or_rows)} 个，"
@@ -2702,6 +2724,8 @@ def main(argv=None):
         return 130
     except Exception as exc:
         err(f"❌ {exc}")
+        import traceback
+        traceback.print_exc()
         return 1
 
 
