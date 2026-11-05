@@ -1766,7 +1766,7 @@ def compute_changes(prev_rows, rows, day):
             changes.append({
                 "day": day, "key": key, "kind": "removed", "source": old["source"],
                 "vendor": old["vendor"], "vendor_name": old["vendor_name"],
-                "model_name": old["model_name"], "provider": old["provider"],
+                "model_name": old["name"], "provider": old["provider"],
                 "field": "model", "old_value": old["name"], "new_value": None,
             })
     return changes
