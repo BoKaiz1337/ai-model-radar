@@ -631,15 +631,17 @@ def err(msg: str) -> None:
     print(f"[{now_local().strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
 
 
-def run_curl(url: str, timeout: int = 90, retries: int = 3) -> str:
-    """用系统 curl 抓取，失败自动退避重试。"""
+def run_curl(url: str, timeout: int = 90, retries: int = 3, proxy=None) -> str:
+    """用系统 curl 抓取，失败自动退避重试。proxy 形如 http://127.0.0.1:7897。"""
     cmd = [
         "/usr/bin/curl", "-sSL", "--compressed",
         "--max-time", str(timeout),
         "-A", UA,
         "-H", "Accept: application/json,text/plain,*/*",
-        url,
     ]
+    if proxy:
+        cmd += ["-x", str(proxy)]
+    cmd.append(url)
     last = ""
     for attempt in range(1, retries + 1):
         try:
@@ -659,8 +661,8 @@ def run_curl(url: str, timeout: int = 90, retries: int = 3) -> str:
     raise RuntimeError(f"抓取失败：{url}（{last[:200]}）")
 
 
-def fetch_json(url: str, timeout: int = 90, retries: int = 3):
-    return json.loads(run_curl(url, timeout=timeout, retries=retries))
+def fetch_json(url: str, timeout: int = 90, retries: int = 3, proxy=None):
+    return json.loads(run_curl(url, timeout=timeout, retries=retries, proxy=proxy))
 
 
 def per_million(value):
@@ -1173,7 +1175,15 @@ def build_modelsdev_rows(cfg: dict):
     if not md_cfg.get("enabled", True):
         return [], {"ok": False, "count": 0, "note": "已在配置中关闭"}, None
 
-    raw = fetch_json(md_cfg.get("url", MODELSDEV_URL), timeout=150, retries=2)
+    md_url = md_cfg.get("url", MODELSDEV_URL)
+    md_proxy = md_cfg.get("proxy") or None
+    try:
+        raw = fetch_json(md_url, timeout=150, retries=2, proxy=md_proxy)
+    except Exception:
+        if md_proxy:
+            raw = fetch_json(md_url, timeout=150, retries=2)
+        else:
+            raise
     if not isinstance(raw, dict) or not raw:
         raise SourceError("models.dev 返回格式异常")
 
