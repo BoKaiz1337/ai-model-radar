@@ -504,6 +504,11 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "url": MODELSDEV_URL,
     },
+    "publish": {
+        "enabled": True,
+        "worktree": str(Path.home() / "Code" / "ai-model-radar-pages"),
+        "branch": "gh-pages",
+    },
     "vendors": DEFAULT_VENDORS,
 }
 
@@ -2199,6 +2204,64 @@ def maybe_notify(con, cfg, args, rows, changes, mode):
     send_notification(message, subtitle)
 
 
+def publish_dashboard(cfg, rows, con):
+    """把当前 dashboard 直接推到 GitHub Pages 的 gh-pages 分支。
+
+    GitHub Actions 的 Pages artifact 偶尔会抽风，而且 scheduled workflow
+    会被 GitHub 延迟。本机 15 分钟/3 小时更新后直接 push，页面更稳。
+    """
+    pub = cfg.get("publish") or {}
+    if not pub.get("enabled"):
+        return
+    worktree = Path(pub.get("worktree", "")).expanduser()
+    if not worktree.exists():
+        err(f"⚠ 发布目录不存在：{worktree}")
+        return
+    index = worktree / "index.html"
+    state_hash = snapshot_hash(rows)
+    if get_state(con, "last_publish_hash") == state_hash and index.exists():
+        return
+
+    html = DASH_PATH.read_text(encoding="utf-8")
+    changed = True
+    if index.exists():
+        try:
+            changed = index.read_text(encoding="utf-8") != html
+        except Exception:
+            changed = True
+    if changed:
+        atomic_write_text(index, html)
+        atomic_write_text(worktree / ".nojekyll", "")
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(worktree), "add", "index.html", ".nojekyll"],
+            capture_output=True,
+        )
+        staged = subprocess.run(
+            ["/usr/bin/git", "-C", str(worktree), "diff", "--cached", "--quiet"],
+            capture_output=True,
+        )
+        if staged.returncode != 0:
+            subprocess.run(
+                ["/usr/bin/git", "-C", str(worktree),
+                 "-c", "user.name=aimon-bot",
+                 "-c", "user.email=aimon-bot@users.noreply.github.com",
+                 "commit", "--amend", "-m",
+                 f"dashboard: {now_local().strftime('%Y-%m-%d %H:%M:%S')}"],
+                capture_output=True,
+            )
+
+    push = subprocess.run(
+        ["/usr/bin/git", "-C", str(worktree), "push", "--force", "origin",
+         pub.get("branch", "gh-pages")],
+        capture_output=True, text=True, timeout=90,
+    )
+    if push.returncode == 0:
+        set_state(con, "last_publish_hash", state_hash)
+        log("线上页面已推送到 gh-pages")
+    else:
+        err(f"⚠ 线上页面推送失败：{(push.stderr or push.stdout or '').strip()[:200]}")
+
+
 # ---------------------------------------------------------------------------
 # 命令
 # ---------------------------------------------------------------------------
@@ -2341,6 +2404,10 @@ def cmd_update(args):
     try:
         data = load_dashboard_data(con, cfg, day=day)
         render_dashboard(data)
+        try:
+            publish_dashboard(cfg, rows, con)
+        except Exception as exc:
+            err(f"⚠ 线上页面发布失败：{exc}")
         report_path = generate_report(data)
         if not args.quiet:
             print_summary(data, report_path)
@@ -2429,6 +2496,10 @@ def run_light(cfg, con, args):
     try:
         data = load_dashboard_data(con, cfg, day=day)
         render_dashboard(data)
+        try:
+            publish_dashboard(cfg, rows, con)
+        except Exception as exc:
+            err(f"⚠ 线上页面发布失败：{exc}")
         report_path = generate_report(data)
         if not getattr(args, "quiet", False):
             print_light_summary(data, tick_changes, report_path)

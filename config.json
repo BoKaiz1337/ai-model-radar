@@ -463,5 +463,10 @@
     "url": "https://models.dev/api.json"
   },
   "light_interval_minutes": 15,
-  "full_interval_hours": 3
+  "full_interval_hours": 3,
+  "publish": {
+    "enabled": false,
+    "worktree": "",
+    "branch": "gh-pages"
+  }
 }
