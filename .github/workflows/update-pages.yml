@@ -8,8 +8,6 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 concurrency:
   group: github-pages
@@ -21,9 +19,6 @@ jobs:
     timeout-minutes: 15
     env:
       TZ: Asia/Shanghai
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -47,19 +42,16 @@ jobs:
           cp "$HOME/.aimonitor/dashboard.html" public/index.html
           cp README.md public/README.md
 
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
+      - name: Publish to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          enablement: true
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: public
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: public
+          publish_branch: gh-pages
+          force_orphan: true
+          user_name: aimon-bot
+          user_email: aimon-bot@users.noreply.github.com
+          commit_message: "dashboard: scheduled update"
 
       - name: Save snapshots
         if: steps.update.outcome == 'success'
